@@ -18,6 +18,10 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+
+from dotenv import load_dotenv
+
+load_dotenv()
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
