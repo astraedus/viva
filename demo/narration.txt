@@ -1,0 +1,25 @@
+Every year, millions of job seekers practice interviews alone with zero feedback. They record themselves on their phones, watch it back, and cringe. Human coaches cost 100 to 300 dollars per session and aren't available on demand.
+
+Meet Viva, a real-time AI interview coach powered by Google's Gemini Live API.
+
+Viva conducts mock interviews using bidirectional audio streaming. The AI interviewer asks questions, listens to your answers, and responds naturally through voice. You can even interrupt mid-sentence, and the AI handles it gracefully.
+
+But that's just the beginning. While you speak, Viva watches your webcam. Every two seconds, Gemini Vision analyzes your body language, checking your eye contact, posture, facial expressions, and overall confidence. You get real-time coaching tips as an overlay on your screen.
+
+Let me show you how it works. On the setup page, I select my target role, industry, difficulty level, and interview type. Then I click Start Interview.
+
+The WebSocket connection establishes, and the AI interviewer begins. Notice the timer, the connection status, and the speaking indicator that pulses when the AI is talking.
+
+As I answer questions, Viva tracks my speech patterns, detecting filler words, analyzing my pace, and scoring my confidence level. Each answer is scored by Gemini AI on relevance, clarity, and depth, not simple heuristics, but real AI evaluation of your response quality.
+
+On the right sidebar, you can see the live body language feedback updating every two seconds. Eye contact, posture, expression, and actionable coaching tips. Notice the coaching toasts that pop up in real time: reminders to maintain eye contact, sit up straight, or encouragement when you're projecting confidence.
+
+After the interview, Viva generates a comprehensive scorecard with an AI coaching summary. Gemini writes a personalized debrief highlighting your strongest area and the number one thing to improve. You also get per-question breakdowns with strengths and improvements, and aggregate speech pattern statistics.
+
+Here's the architecture. The Next.js frontend captures microphone audio through a Web Audio API AudioWorklet and streams it as 16 kilohertz PCM over WebSocket to a FastAPI backend on Cloud Run. The backend connects to Gemini Live API for bidirectional audio streaming and Gemini Vision for body language analysis. Four ADK agent tools handle speech tracking, answer scoring, body language coaching, and question generation.
+
+The backend runs on Google Cloud Run with auto-scaling. API keys are stored in Secret Manager. The entire deployment is automated through a single deploy script, Infrastructure as Code.
+
+Viva transforms interview preparation from a solo guessing game into an interactive coaching experience. With Gemini's multimodal capabilities, we can analyze what you say, how you say it, and how you look while saying it, all in real time.
+
+Built for the Gemini Live Agent Challenge.

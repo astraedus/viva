@@ -99,10 +99,20 @@ function InterviewPageInner() {
   const [isAISpeaking, setIsAISpeaking] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isWaitingForAI, setIsWaitingForAI] = useState(false);
+  const [coachingTips, setCoachingTips] = useState<{id: number; text: string; type: 'positive' | 'warning'}[]>([]);
+  const tipIdRef = useRef(0);
 
   const getCurrentElapsed = useCallback((): number => {
     if (!interviewStartRef.current) return 0;
     return Math.floor((Date.now() - interviewStartRef.current.getTime()) / 1000);
+  }, []);
+
+  const addCoachingTip = useCallback((text: string, type: 'positive' | 'warning' = 'warning') => {
+    const id = tipIdRef.current++;
+    setCoachingTips(prev => [...prev.slice(-2), { id, text, type }]);
+    setTimeout(() => {
+      setCoachingTips(prev => prev.filter(t => t.id !== id));
+    }, 5000);
   }, []);
 
   const addMessage = useCallback((role: 'coach' | 'system', text: string) => {
@@ -295,12 +305,22 @@ function InterviewPageInner() {
           tips: result.tips,
           confidence_score: result.confidence_score,
         });
+        // Trigger real-time coaching toasts based on body language feedback
+        if (result.eye_contact === false) {
+          addCoachingTip("Look at the camera to maintain eye contact", "warning");
+        }
+        if (result.posture === "slouched") {
+          addCoachingTip("Sit up straight — good posture projects confidence", "warning");
+        }
+        if (result.confidence_score !== undefined && result.confidence_score > 0.8) {
+          addCoachingTip("Great presence! You're projecting confidence", "positive");
+        }
       },
       (err) => console.warn('[FrameCapture]', err),
       2000,
     );
     stopFrameCaptureRef.current = stop;
-  }, [sessionId]);
+  }, [sessionId, addCoachingTip]);
 
   // Cleanup frame capture on unmount
   useEffect(() => {
@@ -532,6 +552,25 @@ function InterviewPageInner() {
           <aside className="w-64 p-4 border-l border-neutral-800 bg-neutral-900/40 overflow-y-auto">
             <FeedbackOverlay feedback={feedback} className="h-full" />
           </aside>
+        </div>
+
+        {/* Coaching Toasts */}
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm">
+          {coachingTips.map(tip => (
+            <div
+              key={tip.id}
+              className={`px-4 py-3 rounded-lg shadow-lg border backdrop-blur-sm animate-in slide-in-from-right duration-300 ${
+                tip.type === 'positive'
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  : 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-lg">{tip.type === 'positive' ? '\u2713' : '!'}</span>
+                <span className="text-sm font-medium">{tip.text}</span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </>

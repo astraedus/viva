@@ -143,6 +143,46 @@ async def get_session(session_id: str) -> InterviewSession:
     return _get_session_or_404(session_id)
 
 
+async def generate_report_summary(session) -> str:
+    """Generate AI coaching summary for the interview report."""
+    try:
+        from google import genai
+        client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+
+        questions_summary = []
+        for q in session.questions:
+            questions_summary.append(
+                f"Q: {q.question_text}\nScore: {q.score.overall if q.score else 'N/A'}"
+            )
+
+        scored_questions = [q for q in session.questions if q.score is not None]
+        overall_score = (
+            round(sum(q.score.overall for q in scored_questions) / len(scored_questions), 1)
+            if scored_questions else 0.0
+        )
+
+        prompt = f"""You are an expert interview coach writing a personalized debrief.
+
+Role applied for: {session.config.role}
+Industry: {session.config.industry}
+Difficulty: {session.config.difficulty}
+Overall Score: {overall_score}/10
+
+Questions and scores:
+{chr(10).join(questions_summary)}
+
+Write a 3-4 sentence coaching summary. Be specific, encouraging but honest. Mention their strongest area and #1 thing to improve. Keep it conversational and motivating."""
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.warning("generate_report_summary failed: %s", e)
+        return "Great effort! Review your scores above and focus on areas marked for improvement. Practice with specific examples from your experience."
+
+
 @app.get("/api/sessions/{session_id}/report", response_model=SessionReportResponse)
 async def get_report(session_id: str) -> SessionReportResponse:
     """Return post-interview scorecard."""
@@ -168,6 +208,8 @@ async def get_report(session_id: str) -> SessionReportResponse:
         "Review the individual question feedback for detailed improvement areas."
     )
 
+    ai_summary = await generate_report_summary(session)
+
     return SessionReportResponse(
         session_id=session_id,
         config=session.config,
@@ -175,6 +217,7 @@ async def get_report(session_id: str) -> SessionReportResponse:
         overall_score=overall_score,
         summary_feedback=summary,
         speech_patterns_aggregate=aggregate_speech,
+        ai_summary=ai_summary,
     )
 
 

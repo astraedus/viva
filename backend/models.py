@@ -121,6 +121,7 @@ class SessionReportResponse(BaseModel):
     overall_score: float
     summary_feedback: str
     speech_patterns_aggregate: SpeechPatterns
+    ai_summary: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

@@ -113,37 +113,68 @@ def score_answer(question: str, answer: str, role: str, difficulty: str) -> dict
         dict with keys: relevance, clarity, depth, overall, feedback,
                         strengths, improvements
     """
-    # TODO: replace heuristics with a real Gemini API call for nuanced scoring
-    word_count = len(answer.split())
+    try:
+        from google import genai
+        import json as _json
+        client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
 
-    # Length-based heuristics (rough proxy until real API)
-    if word_count < 30:
-        relevance, clarity, depth = 4.0, 5.0, 3.0
-        feedback = "Your answer was quite brief. Try to elaborate with specific examples."
-        strengths = ["Direct and to the point"]
-        improvements = ["Add a concrete example", "Expand on the impact of your actions"]
-    elif word_count < 100:
-        relevance, clarity, depth = 6.5, 7.0, 6.0
-        feedback = "Good answer with reasonable detail. Consider using the STAR method for more impact."
-        strengths = ["Good structure", "Reasonable length"]
-        improvements = ["Include measurable outcomes", "Be more specific about your role"]
-    else:
-        relevance, clarity, depth = 8.0, 7.5, 8.5
-        feedback = "Excellent detailed answer! You demonstrated depth and used concrete examples."
-        strengths = ["Comprehensive", "Specific examples used", "Good depth"]
-        improvements = ["Summarise your key point at the end for clarity"]
+        prompt = f"""You are an expert interview coach evaluating a candidate's answer.
 
-    overall = round((relevance + clarity + depth) / 3, 1)
+Role: {role}
+Difficulty: {difficulty}
+Question: {question}
+Answer: {answer}
 
-    return {
-        "relevance": relevance,
-        "clarity": clarity,
-        "depth": depth,
-        "overall": overall,
-        "feedback": feedback,
-        "strengths": strengths,
-        "improvements": improvements,
-    }
+Score the answer on these dimensions (0-10 scale):
+- relevance: How well does the answer address the question?
+- clarity: How clearly is the answer communicated?
+- depth: How thorough and insightful is the answer?
+
+Also provide:
+- overall: Weighted average (relevance 40%, clarity 30%, depth 30%)
+- feedback: 1-2 sentence constructive feedback
+- strengths: List of 2-3 specific strengths
+- improvements: List of 2-3 specific areas to improve
+
+Return ONLY valid JSON with these exact fields. No markdown, no explanation."""
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        text = response.text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        result = _json.loads(text)
+
+        return {
+            "relevance": float(result.get("relevance", 5.0)),
+            "clarity": float(result.get("clarity", 5.0)),
+            "depth": float(result.get("depth", 5.0)),
+            "overall": float(result.get("overall", 5.0)),
+            "feedback": result.get("feedback", "Good attempt. Keep practicing."),
+            "strengths": result.get("strengths", ["Addressed the question"]),
+            "improvements": result.get("improvements", ["Add more specific examples"]),
+        }
+    except Exception as e:
+        logger.warning("score_answer Gemini call failed: %s — falling back to heuristics", e)
+        word_count = len(answer.split())
+        if word_count < 30:
+            overall = 4.0
+        elif word_count < 100:
+            overall = 6.5
+        else:
+            overall = 8.0
+        return {
+            "relevance": overall,
+            "clarity": overall - 0.5,
+            "depth": overall - 1.0,
+            "overall": overall,
+            "feedback": "Answer evaluated. Try to provide more specific examples.",
+            "strengths": ["Addressed the question directly"],
+            "improvements": ["Include concrete examples from experience"],
+        }
 
 
 def generate_next_question(

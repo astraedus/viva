@@ -38,6 +38,7 @@ interface SessionReport {
     words_per_minute: number | null;
     confidence_score: number;
   };
+  ai_summary?: string;
 }
 
 function ScoreRing({ score }: { score: number }) {
@@ -262,6 +263,17 @@ function ReportPageInner() {
             </p>
           </div>
         </div>
+
+        {/* AI Coaching Summary */}
+        {report.ai_summary && (
+          <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-xl p-6 mb-8">
+            <h3 className="text-emerald-400 font-semibold text-lg mb-3 flex items-center gap-2">
+              <span className="w-8 h-8 bg-emerald-500/20 rounded-full flex items-center justify-center text-sm">AI</span>
+              Coach's Assessment
+            </h3>
+            <p className="text-gray-300 leading-relaxed">{report.ai_summary}</p>
+          </div>
+        )}
 
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4">
