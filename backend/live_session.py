@@ -109,17 +109,17 @@ class GeminiLiveSession:
         """Open a Live API session with the given system prompt."""
         from google.genai import types
 
-        config = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": system_prompt,
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {"voice_name": "Kore"}
-                }
-            },
-            "input_audio_transcription": {},
-            "output_audio_transcription": {},
-        }
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(
+                parts=[types.Part(text=system_prompt)]
+            ),
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
+                )
+            ),
+        )
 
         logger.info("Connecting to Gemini Live API (%s)...", self.MODEL)
         async with self._client.aio.live.connect(
@@ -136,8 +136,10 @@ class GeminiLiveSession:
             return
         try:
             from google.genai import types
-            await self._session.send_realtime_input(
-                audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
+            await self._session.send(
+                input=types.LiveClientRealtimeInput(
+                    media_chunks=[types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")]
+                )
             )
         except Exception as exc:
             logger.warning("Error sending audio: %s", exc)
@@ -147,10 +149,7 @@ class GeminiLiveSession:
         if not self._session or not self._active:
             return
         try:
-            await self._session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
-                turn_complete=True,
-            )
+            await self._session.send(input=text, end_of_turn=True)
         except Exception as exc:
             logger.warning("Error sending text: %s", exc)
 
