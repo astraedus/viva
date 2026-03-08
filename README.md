@@ -14,14 +14,32 @@ Viva is a full-stack application that provides real-time AI coaching during job 
 ## Architecture
 
 ```
-frontend (Next.js 14)          backend (FastAPI)
-  |                               |
-  |-- WebSocket /ws/{id} -------> Gemini Live API
-  |                               (gemini-2.5-flash-native-audio-preview)
-  |
-  |-- POST /api/analyze-frame --> Gemini Vision API
-                                  (gemini-2.0-flash)
+                    ┌─────────────────────────────────────────────┐
+                    │              Google Cloud                    │
+                    │                                             │
+┌──────────┐       │  ┌──────────────┐    ┌───────────────────┐  │
+│  Browser  │◄─────┼──┤  Cloud Run   │    │  Gemini Live API  │  │
+│           │      │  │  (FastAPI)   │◄──►│  (native-audio)   │  │
+│ Next.js   │─ws──►│  │              │    │  Bidirectional    │  │
+│ Camera    │      │  │  WebSocket   │    │  Audio Streaming  │  │
+│ Mic/Audio │      │  │  Handler     │    └───────────────────┘  │
+│ Worklet   │      │  │              │                           │
+└──────────┘       │  │  REST API    │    ┌───────────────────┐  │
+     │             │  │  /api/*      │───►│  Gemini Vision    │  │
+     │ JPEG frames │  │              │    │  (2.5-flash)      │  │
+     └─────────────┼──┤  ADK Agent   │    │  Body Language    │  │
+                   │  │  Tools       │    │  Analysis         │  │
+                   │  └──────────────┘    └───────────────────┘  │
+                   │                                             │
+                   │  ┌──────────────┐                           │
+                   │  │ Secret Mgr   │  API Key Storage          │
+                   │  └──────────────┘                           │
+                   └─────────────────────────────────────────────┘
 ```
+
+**Audio Pipeline**: Browser mic (16kHz PCM) -> AudioWorklet -> WebSocket -> Gemini Live API -> 24kHz PCM -> PcmPlayer -> Speaker
+
+**Vision Pipeline**: Camera frame (JPEG) -> REST POST /api/analyze-frame -> Gemini Vision -> Body language coaching tips (every 2s)
 
 ## Quick Start
 
@@ -117,15 +135,37 @@ The backend ADK agent (`backend/agent.py`) exposes four tools:
 | `score_answer` | Scores a candidate's answer on relevance, clarity, and depth |
 | `generate_next_question` | Selects the next question based on role, difficulty, and weak areas |
 
+## Cloud Deployment (IaC)
+
+```bash
+# Deploy backend to Cloud Run + frontend to Vercel
+export GOOGLE_API_KEY="your-key"
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+./deploy.sh
+```
+
+The `deploy.sh` script automates:
+- Enabling required GCP APIs (Cloud Run, Cloud Build, Secret Manager, Generative Language)
+- Storing API key in Secret Manager
+- Building container image via Cloud Build
+- Deploying to Cloud Run with auto-scaling (0-3 instances)
+- Deploying frontend to Vercel with backend URL injection
+
+## Google Cloud Services Used
+
+| Service | Purpose |
+|---------|---------|
+| Cloud Run | Backend hosting (auto-scaling, serverless) |
+| Cloud Build | Container image building |
+| Secret Manager | API key storage |
+| Generative Language API | Gemini Live API + Vision API |
+
 ## Roadmap
 
-- [ ] Wire up real Gemini Live API calls in `live_session.py`
-- [ ] Wire up real Gemini Vision calls in `vision_analyzer.py`
 - [ ] Real-time transcript display from Gemini speech-to-text
 - [ ] Custom question bank upload
 - [ ] Session recording and playback
-- [ ] Supabase persistence for sessions and reports
-- [ ] Deployment: backend on Cloud Run, frontend on Vercel
+- [ ] Cloud Storage for session recordings
 
 ## Tech Stack
 
