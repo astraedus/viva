@@ -85,32 +85,33 @@ async def analyze_frame(frame_b64: str, api_key: Optional[str] = None) -> BodyLa
         return _get_mock_analysis()
 
     try:
-        # TODO: replace with real google-genai SDK call once key is available
-        # from google import genai
-        # from google.genai import types
-        #
-        # client = genai.Client(api_key=key)
-        # response = client.models.generate_content(
-        #     model="gemini-2.0-flash",
-        #     contents=[
-        #         types.Part.from_bytes(
-        #             data=base64.b64decode(frame_b64),
-        #             mime_type="image/jpeg",
-        #         ),
-        #         _VISION_PROMPT,
-        #     ],
-        # )
-        # raw = response.text.strip()
-        # data = json.loads(raw)
-        # return BodyLanguageAnalysis(
-        #     eye_contact=data["eye_contact"],
-        #     posture=PostureType(data["posture"]),
-        #     expression=ExpressionType(data["expression"]),
-        #     tips=data.get("tips", []),
-        #     confidence_score=float(data["confidence_score"]),
-        # )
-        raise NotImplementedError("Real Gemini Vision call not yet wired up")
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Part.from_bytes(
+                    data=base64.b64decode(frame_b64),
+                    mime_type="image/jpeg",
+                ),
+                _VISION_PROMPT,
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+            ),
+        )
+        raw = response.text.strip()
+        data = json.loads(raw)
+        return BodyLanguageAnalysis(
+            eye_contact=data["eye_contact"],
+            posture=PostureType(data["posture"]),
+            expression=ExpressionType(data["expression"]),
+            tips=data.get("tips", []),
+            confidence_score=float(data["confidence_score"]),
+        )
 
     except Exception as exc:
-        logger.warning("Vision API error (%s) — falling back to mock", exc)
+        logger.warning("Vision API error (%s) -- falling back to mock", exc)
         return _get_mock_analysis()

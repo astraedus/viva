@@ -249,7 +249,7 @@ def create_agent():
 
         return Agent(
             name="viva_coach",
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             description="AI interview coach that provides real-time feedback",
             instruction=SYSTEM_INSTRUCTION,
             tools=[

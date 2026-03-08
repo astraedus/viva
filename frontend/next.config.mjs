@@ -1,11 +1,7 @@
-import type { NextConfig } from 'next';
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   reactStrictMode: true,
-
   async rewrites() {
-    // Proxy /api/* to backend in development so CORS is not an issue.
-    // In production, configure your reverse proxy (Nginx/Caddy) instead.
     const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';
     return [
       {

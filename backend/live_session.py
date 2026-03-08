@@ -86,13 +86,9 @@ class MockLiveSession:
 # ---------------------------------------------------------------------------
 
 class GeminiLiveSession:
-    """Wraps the Gemini Live API (gemini-2.5-flash-native-audio-preview).
+    """Wraps the Gemini Live API for bidirectional audio streaming."""
 
-    TODO: Implement once the google-genai SDK exposes Live API bindings.
-    See: https://ai.google.dev/gemini-api/docs/live
-    """
-
-    MODEL = "gemini-2.5-flash-native-audio-preview"
+    MODEL = "gemini-2.5-flash-native-audio-latest"
 
     def __init__(
         self,
@@ -100,63 +96,113 @@ class GeminiLiveSession:
         on_audio: AudioChunkCallback,
         on_text: Callable[[str], None],
     ):
-        self._api_key = api_key
+        from google import genai
+
+        self._client = genai.Client(api_key=api_key)
         self._on_audio = on_audio
         self._on_text = on_text
         self._session = None
         self._receive_task: Optional[asyncio.Task] = None
+        self._active = False
 
     async def start(self, system_prompt: str) -> None:
         """Open a Live API session with the given system prompt."""
-        # TODO: wire up real SDK
-        # from google import genai
-        # from google.genai import types
-        #
-        # client = genai.Client(api_key=self._api_key)
-        # config = types.LiveConnectConfig(
-        #     response_modalities=["AUDIO"],
-        #     system_instruction=system_prompt,
-        #     speech_config=types.SpeechConfig(
-        #         voice_config=types.VoiceConfig(
-        #             prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
-        #         )
-        #     ),
-        # )
-        # async with client.aio.live.connect(model=self.MODEL, config=config) as session:
-        #     self._session = session
-        #     self._receive_task = asyncio.create_task(self._receive_loop())
-        #     await self._receive_task
-        raise NotImplementedError("Real Gemini Live session not yet wired up")
+        from google.genai import types
+
+        config = {
+            "response_modalities": ["AUDIO"],
+            "system_instruction": system_prompt,
+            "speech_config": {
+                "voice_config": {
+                    "prebuilt_voice_config": {"voice_name": "Kore"}
+                }
+            },
+            "input_audio_transcription": {},
+            "output_audio_transcription": {},
+        }
+
+        logger.info("Connecting to Gemini Live API (%s)...", self.MODEL)
+        async with self._client.aio.live.connect(
+            model=self.MODEL, config=config
+        ) as session:
+            self._session = session
+            self._active = True
+            logger.info("Gemini Live session connected")
+            await self._receive_loop()
 
     async def send_audio(self, chunk: bytes) -> None:
         """Forward PCM audio chunk to Gemini."""
-        # TODO:
-        # await self._session.send(
-        #     types.LiveClientRealtimeInput(
-        #         media_chunks=[types.Blob(data=chunk, mime_type="audio/pcm")]
-        #     )
-        # )
-        pass
+        if not self._session or not self._active:
+            return
+        try:
+            from google.genai import types
+            await self._session.send_realtime_input(
+                audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
+            )
+        except Exception as exc:
+            logger.warning("Error sending audio: %s", exc)
+
+    async def send_text(self, text: str) -> None:
+        """Send text message into the live session."""
+        if not self._session or not self._active:
+            return
+        try:
+            await self._session.send_client_content(
+                turns={"role": "user", "parts": [{"text": text}]},
+                turn_complete=True,
+            )
+        except Exception as exc:
+            logger.warning("Error sending text: %s", exc)
 
     async def barge_in(self) -> None:
-        """Interrupt current Gemini turn."""
-        # TODO: await self._session.send(types.LiveClientRealtimeInput(end_of_turn=True))
-        pass
+        """Signal barge-in (Gemini handles this via VAD automatically)."""
+        logger.debug("Barge-in signal received")
 
     async def close(self) -> None:
+        self._active = False
         if self._receive_task:
             self._receive_task.cancel()
+        logger.info("GeminiLiveSession closed")
 
     async def _receive_loop(self) -> None:
         """Read audio/text responses from Gemini and dispatch via callbacks."""
-        # TODO:
-        # async for response in self._session.receive():
-        #     for part in response.server_content.model_turn.parts:
-        #         if part.inline_data:
-        #             self._on_audio(part.inline_data.data)
-        #         elif part.text:
-        #             self._on_text(part.text)
-        pass
+        try:
+            async for response in self._session.receive():
+                if not self._active:
+                    break
+
+                server_content = getattr(response, "server_content", None)
+                if not server_content:
+                    continue
+
+                # Check for interruption
+                if getattr(server_content, "interrupted", False):
+                    logger.debug("Gemini interrupted by user speech")
+                    continue
+
+                model_turn = getattr(server_content, "model_turn", None)
+                if model_turn and model_turn.parts:
+                    for part in model_turn.parts:
+                        inline_data = getattr(part, "inline_data", None)
+                        if inline_data and isinstance(inline_data.data, bytes):
+                            await self._on_audio(inline_data.data)
+                        elif hasattr(part, "text") and part.text:
+                            self._on_text(part.text)
+
+                # Check for input transcription
+                input_transcription = getattr(server_content, "input_transcription", None)
+                if input_transcription and input_transcription.text:
+                    logger.info("User said: %s", input_transcription.text)
+
+                # Check for output transcription
+                output_transcription = getattr(server_content, "output_transcription", None)
+                if output_transcription and output_transcription.text:
+                    self._on_text(output_transcription.text)
+
+        except asyncio.CancelledError:
+            logger.info("Receive loop cancelled")
+        except Exception as exc:
+            logger.error("Receive loop error: %s", exc)
 
 
 # ---------------------------------------------------------------------------
