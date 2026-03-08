@@ -16,9 +16,56 @@ interface InterviewMessage {
   role: 'coach' | 'system';
   text: string;
   timestamp: Date;
+  interviewElapsed: number; // seconds since interview started
 }
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function formatMessageTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function AISpeakingIndicator({ isActive }: { isActive: boolean }) {
+  if (!isActive) return null;
+  return (
+    <div className="flex items-center gap-0.5" aria-label="AI speaking">
+      {[0, 1, 2, 3].map((i) => (
+        <span
+          key={i}
+          className="w-0.5 rounded-full bg-emerald-400"
+          style={{
+            height: '12px',
+            animation: `aiWave 0.8s ease-in-out infinite`,
+            animationDelay: `${i * 0.15}s`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="flex gap-3 message-appear">
+      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs font-bold text-white shrink-0">
+        V
+      </div>
+      <div className="bg-neutral-800 border border-neutral-700 rounded-xl px-4 py-3 flex items-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 typing-dot" style={{ animationDelay: '0s' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 typing-dot" style={{ animationDelay: '0.2s' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 typing-dot" style={{ animationDelay: '0.4s' }} />
+      </div>
+    </div>
+  );
+}
 
 function InterviewPageInner() {
   const router = useRouter();
@@ -33,6 +80,10 @@ function InterviewPageInner() {
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const stopFrameCaptureRef = useRef<(() => void) | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const aiSpeakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const interviewStartRef = useRef<Date | null>(null);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // State
   const [status, setStatus] = useState<ConnectionStatus>('idle');
@@ -45,13 +96,35 @@ function InterviewPageInner() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState('');
   const [interviewComplete, setInterviewComplete] = useState(false);
+  const [isAISpeaking, setIsAISpeaking] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isWaitingForAI, setIsWaitingForAI] = useState(false);
+
+  const getCurrentElapsed = useCallback((): number => {
+    if (!interviewStartRef.current) return 0;
+    return Math.floor((Date.now() - interviewStartRef.current.getTime()) / 1000);
+  }, []);
 
   const addMessage = useCallback((role: 'coach' | 'system', text: string) => {
+    setIsWaitingForAI(false);
     setMessages((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), role, text, timestamp: new Date() },
+      {
+        id: crypto.randomUUID(),
+        role,
+        text,
+        timestamp: new Date(),
+        interviewElapsed: interviewStartRef.current
+          ? Math.floor((Date.now() - interviewStartRef.current.getTime()) / 1000)
+          : 0,
+      },
     ]);
   }, []);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isWaitingForAI]);
 
   // Redirect if no session
   useEffect(() => {
@@ -67,17 +140,38 @@ function InterviewPageInner() {
     const player = new PcmPlayer(24000);
     playerRef.current = player;
 
+    // Wrap playChunk to track AI speaking state
+    const originalPlayChunk = player.playChunk.bind(player);
+    player.playChunk = (chunk: ArrayBuffer) => {
+      originalPlayChunk(chunk);
+      setIsAISpeaking(true);
+      if (aiSpeakingTimerRef.current) {
+        clearTimeout(aiSpeakingTimerRef.current);
+      }
+      aiSpeakingTimerRef.current = setTimeout(() => {
+        setIsAISpeaking(false);
+      }, 500);
+    };
+
     const ws = new VivaWebSocket(sessionId, {
       onConnected: () => {
         setStatus('connected');
+        interviewStartRef.current = new Date();
+        // Start elapsed timer
+        timerIntervalRef.current = setInterval(() => {
+          setElapsedSeconds(Math.floor((Date.now() - interviewStartRef.current!.getTime()) / 1000));
+        }, 1000);
         addMessage('system', 'Connected to Viva. Interview starting...');
+        setIsWaitingForAI(true);
       },
       onDisconnected: () => {
         setStatus('disconnected');
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       },
       onError: (err) => {
         setStatus('error');
         addMessage('system', `Connection error: ${err}`);
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       },
       onMessage: (msg) => {
         switch (msg.type) {
@@ -106,6 +200,7 @@ function InterviewPageInner() {
           case 'session_end': {
             setInterviewComplete(true);
             addMessage('system', 'Interview complete! Generating your report...');
+            if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
             break;
           }
         }
@@ -122,6 +217,8 @@ function InterviewPageInner() {
     return () => {
       ws.disconnect();
       player.stop();
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (aiSpeakingTimerRef.current) clearTimeout(aiSpeakingTimerRef.current);
     };
   }, [sessionId, addMessage]);
 
@@ -249,149 +346,195 @@ function InterviewPageInner() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col">
-      {/* Top bar */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
-          <span className="text-lg font-bold text-emerald-400">Viva</span>
-          <div className="flex items-center gap-1.5 text-xs text-neutral-400">
-            <span className={`w-2 h-2 rounded-full ${statusColor[status]}`} />
-            <span className="capitalize">{status}</span>
+    <>
+      <style>{`
+        @keyframes aiWave {
+          0%, 100% { transform: scaleY(0.4); opacity: 0.6; }
+          50% { transform: scaleY(1); opacity: 1; }
+        }
+        @keyframes typingBounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+          40% { transform: translateY(-4px); opacity: 1; }
+        }
+        @keyframes messageAppear {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .typing-dot {
+          animation: typingBounce 1.2s ease-in-out infinite;
+          display: inline-block;
+        }
+        .message-appear {
+          animation: messageAppear 0.25s ease-out forwards;
+        }
+      `}</style>
+      <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col">
+        {/* Top bar */}
+        <header className="flex items-center justify-between px-6 py-3 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-sm">
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-bold text-emerald-400">Viva</span>
+            <div className="flex items-center gap-1.5 text-xs text-neutral-400">
+              <span className={`w-2 h-2 rounded-full ${statusColor[status]}`} />
+              <span className="capitalize">{status}</span>
+            </div>
           </div>
-        </div>
 
-        <div className="text-sm text-neutral-400">
-          Question <span className="text-white font-semibold">{questionNumber}</span>
-        </div>
-
-        <button
-          onClick={() => router.push('/')}
-          className="text-xs text-neutral-500 hover:text-neutral-300 transition"
-        >
-          Exit
-        </button>
-      </header>
-
-      {/* Main layout */}
-      <div className="flex-1 flex gap-0 overflow-hidden">
-        {/* Left panel — camera + visualizer */}
-        <aside className="w-72 flex flex-col gap-3 p-4 border-r border-neutral-800 bg-neutral-900/40">
-          <VideoFeed
-            ref={videoFeedRef}
-            onStreamReady={handleCameraReady}
-            onError={(err) => setCameraError(err.message)}
-            className="aspect-video"
-          />
-
-          {cameraError && (
-            <div className="text-xs text-red-400 bg-red-900/20 border border-red-500/30 rounded-lg p-2">
-              Camera: {cameraError}
+          {/* Timer */}
+          {status === 'connected' && (
+            <div className="flex items-center gap-2">
+              <div className="font-mono text-sm text-emerald-400 tabular-nums bg-emerald-950/40 border border-emerald-800/40 rounded-lg px-3 py-1">
+                {formatElapsed(elapsedSeconds)}
+              </div>
+              <AISpeakingIndicator isActive={isAISpeaking} />
             </div>
           )}
 
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-neutral-400 uppercase tracking-wide">Microphone</span>
-              <button
-                onClick={toggleMic}
-                className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
-                  isMicActive
-                    ? 'bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30'
-                    : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
-                }`}
-              >
-                {isMicActive ? 'Mute' : 'Unmute'}
-              </button>
-            </div>
-            <AudioVisualizer stream={micStream} active={isMicActive} bars={24} />
+          <div className="text-sm text-neutral-400">
+            Question <span className="text-white font-semibold">{questionNumber}</span>
           </div>
-        </aside>
 
-        {/* Centre — interview chat */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Question banner */}
-          {currentQuestion && (
-            <div className="px-6 py-4 border-b border-neutral-800 bg-neutral-900/60">
-              <p className="text-xs text-neutral-500 uppercase tracking-wide mb-1">
-                Current Question
-              </p>
-              <p className="text-base font-medium text-neutral-100 leading-snug">
-                {currentQuestion}
-              </p>
+          <button
+            onClick={() => router.push('/')}
+            className="text-xs text-neutral-500 hover:text-neutral-300 transition"
+          >
+            Exit
+          </button>
+        </header>
+
+        {/* Main layout */}
+        <div className="flex-1 flex gap-0 overflow-hidden">
+          {/* Left panel - camera + visualizer */}
+          <aside className="w-72 flex flex-col gap-3 p-4 border-r border-neutral-800 bg-neutral-900/40">
+            <VideoFeed
+              ref={videoFeedRef}
+              onStreamReady={handleCameraReady}
+              onError={(err) => setCameraError(err.message)}
+              className="aspect-video"
+            />
+
+            {cameraError && (
+              <div className="text-xs text-red-400 bg-red-900/20 border border-red-500/30 rounded-lg p-2">
+                Camera: {cameraError}
+              </div>
+            )}
+
+            <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-neutral-400 uppercase tracking-wide">Microphone</span>
+                <button
+                  onClick={toggleMic}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
+                    isMicActive
+                      ? 'bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30'
+                      : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                  }`}
+                >
+                  {isMicActive ? 'Mute' : 'Unmute'}
+                </button>
+              </div>
+              <AudioVisualizer stream={micStream} active={isMicActive} bars={24} />
             </div>
-          )}
+          </aside>
 
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-            {messages.length === 0 && (
-              <div className="flex items-center justify-center h-full">
-                <p className="text-neutral-600 text-sm italic">
-                  Waiting for interview to begin...
+          {/* Centre - interview chat */}
+          <main className="flex-1 flex flex-col overflow-hidden">
+            {/* Question banner */}
+            {currentQuestion && (
+              <div className="px-6 py-4 border-b border-neutral-800 bg-neutral-900/60">
+                <p className="text-xs text-neutral-500 uppercase tracking-wide mb-1">
+                  Current Question
+                </p>
+                <p className="text-base font-medium text-neutral-100 leading-snug">
+                  {currentQuestion}
                 </p>
               </div>
             )}
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex gap-3 ${msg.role === 'system' ? 'justify-center' : ''}`}
-              >
-                {msg.role === 'coach' && (
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs font-bold text-white shrink-0">
-                    V
-                  </div>
-                )}
-                <div
-                  className={
-                    msg.role === 'system'
-                      ? 'text-xs text-neutral-500 italic'
-                      : 'bg-neutral-800 border border-neutral-700 rounded-xl px-4 py-3 text-sm text-neutral-100 max-w-xl leading-relaxed'
-                  }
-                >
-                  {msg.text}
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {messages.length === 0 && (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-neutral-600 text-sm italic">
+                    Waiting for interview to begin...
+                  </p>
                 </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Answer input + controls */}
-          <div className="px-6 py-4 border-t border-neutral-800 bg-neutral-900/60">
-            {interviewComplete ? (
-              <div className="flex items-center gap-4">
-                <p className="text-sm text-emerald-400 font-medium">Interview complete!</p>
-                <button
-                  onClick={goToReport}
-                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-semibold rounded-xl hover:from-emerald-400 hover:to-teal-400 transition"
+              )}
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex gap-3 message-appear ${msg.role === 'system' ? 'justify-center' : ''}`}
                 >
-                  View Report
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-3 items-end">
-                <textarea
-                  value={transcript}
-                  onChange={(e) => setTranscript(e.target.value)}
-                  placeholder="Type your answer here (or speak using the microphone above)..."
-                  rows={3}
-                  className="flex-1 bg-neutral-800 border border-neutral-600 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder-neutral-500 resize-none focus:outline-none focus:border-emerald-500 transition"
-                />
-                <button
-                  onClick={submitAnswer}
-                  disabled={!transcript.trim()}
-                  className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                >
-                  Submit
-                </button>
-              </div>
-            )}
-          </div>
-        </main>
+                  {msg.role === 'coach' && (
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs font-bold text-white shrink-0">
+                      V
+                    </div>
+                  )}
+                  <div
+                    className={
+                      msg.role === 'system'
+                        ? 'text-xs text-neutral-500 italic'
+                        : 'flex flex-col gap-1'
+                    }
+                  >
+                    {msg.role === 'coach' ? (
+                      <>
+                        <div className="bg-neutral-800 border border-neutral-700 rounded-xl px-4 py-3 text-sm text-neutral-100 max-w-xl leading-relaxed">
+                          {msg.text}
+                        </div>
+                        <span className="text-xs text-neutral-600 pl-1">
+                          {formatMessageTime(msg.interviewElapsed)}
+                        </span>
+                      </>
+                    ) : (
+                      msg.text
+                    )}
+                  </div>
+                </div>
+              ))}
+              {isWaitingForAI && <TypingIndicator />}
+              <div ref={messagesEndRef} />
+            </div>
 
-        {/* Right panel — feedback overlay */}
-        <aside className="w-64 p-4 border-l border-neutral-800 bg-neutral-900/40 overflow-y-auto">
-          <FeedbackOverlay feedback={feedback} className="h-full" />
-        </aside>
+            {/* Answer input + controls */}
+            <div className="px-6 py-4 border-t border-neutral-800 bg-neutral-900/60">
+              {interviewComplete ? (
+                <div className="flex items-center gap-4">
+                  <p className="text-sm text-emerald-400 font-medium">Interview complete!</p>
+                  <button
+                    onClick={goToReport}
+                    className="px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-semibold rounded-xl hover:from-emerald-400 hover:to-teal-400 transition"
+                  >
+                    View Report
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-3 items-end">
+                  <textarea
+                    value={transcript}
+                    onChange={(e) => setTranscript(e.target.value)}
+                    placeholder="Type your answer here (or speak using the microphone above)..."
+                    rows={3}
+                    className="flex-1 bg-neutral-800 border border-neutral-600 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder-neutral-500 resize-none focus:outline-none focus:border-emerald-500 transition"
+                  />
+                  <button
+                    onClick={submitAnswer}
+                    disabled={!transcript.trim()}
+                    className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                  >
+                    Submit
+                  </button>
+                </div>
+              )}
+            </div>
+          </main>
+
+          {/* Right panel - feedback overlay */}
+          <aside className="w-64 p-4 border-l border-neutral-800 bg-neutral-900/40 overflow-y-auto">
+            <FeedbackOverlay feedback={feedback} className="h-full" />
+          </aside>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

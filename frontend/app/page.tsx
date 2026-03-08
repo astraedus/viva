@@ -55,6 +55,41 @@ const DIFFICULTIES = [
   },
 ];
 
+const INTERVIEW_TYPES = [
+  {
+    value: 'behavioral',
+    label: 'Behavioral',
+    icon: '🧠',
+    desc: 'STAR format — real experiences & soft skills',
+    color: 'border-violet-500/50 bg-violet-900/20',
+    activeColor: 'border-violet-400 bg-violet-900/40 ring-2 ring-violet-500/30',
+  },
+  {
+    value: 'technical',
+    label: 'Technical',
+    icon: '⚙️',
+    desc: 'System design, coding concepts, architecture',
+    color: 'border-blue-500/50 bg-blue-900/20',
+    activeColor: 'border-blue-400 bg-blue-900/40 ring-2 ring-blue-500/30',
+  },
+  {
+    value: 'case_study',
+    label: 'Case Study',
+    icon: '📋',
+    desc: 'Business scenarios & problem-solving frameworks',
+    color: 'border-orange-500/50 bg-orange-900/20',
+    activeColor: 'border-orange-400 bg-orange-900/40 ring-2 ring-orange-500/30',
+  },
+  {
+    value: 'mixed',
+    label: 'Mixed',
+    icon: '🎯',
+    desc: 'All question types — comprehensive prep',
+    color: 'border-emerald-500/50 bg-emerald-900/20',
+    activeColor: 'border-emerald-400 bg-emerald-900/40 ring-2 ring-emerald-500/30',
+  },
+];
+
 export default function SetupPage() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -63,6 +98,7 @@ export default function SetupPage() {
   const [customRole, setCustomRole] = useState('');
   const [industry, setIndustry] = useState('Technology');
   const [difficulty, setDifficulty] = useState('medium');
+  const [interviewType, setInterviewType] = useState('mixed');
   const [numQuestions, setNumQuestions] = useState(5);
   const [error, setError] = useState('');
 
@@ -79,6 +115,7 @@ export default function SetupPage() {
             role: finalRole,
             industry,
             difficulty,
+            interview_type: interviewType,
             num_questions: numQuestions,
           },
         }),
@@ -156,6 +193,28 @@ export default function SetupPage() {
               </option>
             ))}
           </select>
+        </div>
+
+        {/* Interview Type */}
+        <div>
+          <label className="block text-sm font-medium text-neutral-300 mb-2">Interview Type</label>
+          <div className="grid grid-cols-2 gap-3">
+            {INTERVIEW_TYPES.map((t) => (
+              <button
+                key={t.value}
+                onClick={() => setInterviewType(t.value)}
+                className={`text-left p-3 rounded-xl border transition-all duration-150 ${
+                  interviewType === t.value ? t.activeColor : t.color + ' hover:opacity-80'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="text-base leading-none">{t.icon}</span>
+                  <span className="text-sm font-semibold text-neutral-100">{t.label}</span>
+                </div>
+                <div className="text-xs text-neutral-400 leading-tight">{t.desc}</div>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Difficulty */}
