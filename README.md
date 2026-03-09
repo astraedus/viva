@@ -2,6 +2,17 @@
 
 Viva is a full-stack application that provides real-time AI coaching during job interviews. It combines Google Gemini's Live audio API with Vision AI to give candidates instant feedback on both their verbal answers and body language.
 
+## Live Demo & Links
+
+| | |
+|---|---|
+| **Live App** | [viva-kappa-two.vercel.app](https://viva-kappa-two.vercel.app) |
+| **Backend API** | [viva-api-93135657352.us-central1.run.app](https://viva-api-93135657352.us-central1.run.app) |
+| **Demo Video** | [youtu.be/UYqJ7gFM57A](https://youtu.be/UYqJ7gFM57A) |
+| **Blog Post** | [Building Viva: A Real-Time AI Interview Coach with Gemini Live API](https://dev.to/diven_rastdus_c5af27d68f3/building-viva-a-real-time-ai-interview-coach-with-gemini-live-api-2dgf) |
+| **DevPost** | [devpost.com/software/viva-real-time-ai-interview-coach](https://devpost.com/software/viva-real-time-ai-interview-coach) |
+| **Hackathon** | Gemini Live Agent Challenge 2026 — Live Agents track |
+
 ## Features
 
 - **Live audio conversation** — bidirectional audio streaming via Gemini Live API (gemini-2.5-flash-native-audio-preview)
