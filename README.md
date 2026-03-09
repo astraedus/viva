@@ -24,29 +24,7 @@ Viva is a full-stack application that provides real-time AI coaching during job 
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │              Google Cloud                    │
-                    │                                             │
-┌──────────┐       │  ┌──────────────┐    ┌───────────────────┐  │
-│  Browser  │◄─────┼──┤  Cloud Run   │    │  Gemini Live API  │  │
-│           │      │  │  (FastAPI)   │◄──►│  (native-audio)   │  │
-│ Next.js   │─ws──►│  │              │    │  Bidirectional    │  │
-│ Camera    │      │  │  WebSocket   │    │  Audio Streaming  │  │
-│ Mic/Audio │      │  │  Handler     │    └───────────────────┘  │
-│ Worklet   │      │  │              │                           │
-└──────────┘       │  │  REST API    │    ┌───────────────────┐  │
-     │             │  │  /api/*      │───►│  Gemini Vision    │  │
-     │ JPEG frames │  │              │    │  (2.5-flash)      │  │
-     └─────────────┼──┤  ADK Agent   │    │  Body Language    │  │
-                   │  │  Tools       │    │  Analysis         │  │
-                   │  └──────────────┘    └───────────────────┘  │
-                   │                                             │
-                   │  ┌──────────────┐                           │
-                   │  │ Secret Mgr   │  API Key Storage          │
-                   │  └──────────────┘                           │
-                   └─────────────────────────────────────────────┘
-```
+![Architecture](docs/architecture.png)
 
 **Audio Pipeline**: Browser mic (16kHz PCM) -> AudioWorklet -> WebSocket -> Gemini Live API -> 24kHz PCM -> PcmPlayer -> Speaker
 
