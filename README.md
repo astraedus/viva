@@ -26,6 +26,17 @@ Viva is a full-stack application that provides real-time AI coaching during job 
 
 ![Architecture](docs/architecture.png)
 
+```mermaid
+graph LR
+    A[Next.js Frontend<br/>WebSocket + WebRTC] -->|Audio stream +<br/>Video frames| B[Cloud Run API<br/>FastAPI + WebSocket]
+    B -->|Bidirectional audio| C[Gemini Live API<br/>Real-time conversation]
+    B -->|Video frames| D[Gemini Vision<br/>Body language analysis]
+    C -->|AI responses +<br/>Coaching feedback| B
+    D -->|Posture, eye contact,<br/>gesture analysis| B
+    B -->|Real-time coaching<br/>toasts + scoring| A
+    B -->|Session complete| E[Gemini Scoring<br/>Detailed feedback +<br/>Interview score]
+```
+
 **Audio Pipeline**: Browser mic (16kHz PCM) -> AudioWorklet -> WebSocket -> Gemini Live API -> 24kHz PCM -> PcmPlayer -> Speaker
 
 **Vision Pipeline**: Camera frame (JPEG) -> REST POST /api/analyze-frame -> Gemini Vision -> Body language coaching tips (every 2s)

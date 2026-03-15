@@ -52,3 +52,11 @@ node_modules/
 .env
 __pycache__/
 .next/
+
+# Internal docs (not for public repo)
+devpost-submission.md
+blog-post.md
+demo/*.mp3
+demo/*.mp4
+demo/narration.txt
+demo/concat.txt
