@@ -33,21 +33,83 @@ function formatMessageTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function AISpeakingIndicator({ isActive }: { isActive: boolean }) {
-  if (!isActive) return null;
+function AIOrb({ isActive, status }: { isActive: boolean; status: ConnectionStatus }) {
+  const isConnecting = status === 'connecting' || status === 'idle';
+  const isLive = status === 'connected';
+
   return (
-    <div className="flex items-center gap-0.5" aria-label="AI speaking">
-      {[0, 1, 2, 3].map((i) => (
-        <span
-          key={i}
-          className="w-0.5 rounded-full bg-emerald-400"
-          style={{
-            height: '12px',
-            animation: `aiWave 0.8s ease-in-out infinite`,
-            animationDelay: `${i * 0.15}s`,
-          }}
-        />
-      ))}
+    <div className="flex flex-col items-center py-4 shrink-0">
+      <div className="relative">
+        {/* Expanding pulse rings when AI is speaking */}
+        {isActive && [0, 1, 2].map(i => (
+          <div
+            key={i}
+            className="absolute rounded-full"
+            style={{
+              inset: `${-(i + 1) * 14}px`,
+              border: '1px solid',
+              borderColor: `rgba(74, 222, 128, ${0.3 - i * 0.08})`,
+              animation: 'pulse-ring 2s ease-out infinite',
+              animationDelay: `${i * 0.4}s`,
+            }}
+          />
+        ))}
+
+        <div className="relative w-24 h-24">
+          {/* Rotating rainbow border */}
+          <div
+            className="absolute inset-0 rounded-full"
+            style={{
+              background: isActive
+                ? 'conic-gradient(#ff6b6b, #feca57, #48dbfb, #ff9ff3, #54a0ff, #5f27cd, #ff6b6b)'
+                : isConnecting
+                  ? 'conic-gradient(#fbbf24, #92400e, #fbbf24)'
+                  : 'conic-gradient(#4ade80, #2dd4bf, #06b6d4, #818cf8, #c084fc, #4ade80)',
+              animation: `rainbow-rotate ${isActive ? '2s' : isConnecting ? '2s' : '6s'} linear infinite`,
+            }}
+          />
+
+          {/* Inner dark circle (sits on top, does not rotate) */}
+          <div className={`absolute inset-[3px] rounded-full bg-neutral-900 flex items-center justify-center transition-shadow duration-500 ${
+            isActive ? 'shadow-[0_0_40px_rgba(74,222,128,0.3)]' : ''
+          }`}>
+            {isConnecting ? (
+              <div className="w-6 h-6 border-2 border-amber-400/60 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <div className="flex items-center gap-[2px]">
+                {[0, 1, 2, 3, 4, 5, 6].map(i => (
+                  <span
+                    key={i}
+                    className={`w-[2.5px] rounded-full transition-colors duration-200 ${
+                      isActive ? 'bg-emerald-400' : 'bg-neutral-600'
+                    }`}
+                    style={{
+                      height: isActive ? '20px' : '8px',
+                      animation: isActive
+                        ? 'orbWave 0.6s ease-in-out infinite'
+                        : 'gentle-breathe 3s ease-in-out infinite',
+                      animationDelay: isActive
+                        ? `${i * 0.07}s`
+                        : `${i * 0.3}s`,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <span className={`mt-3 text-xs font-medium tracking-wide ${
+        isConnecting ? 'text-amber-400' :
+        isActive ? 'text-emerald-400' :
+        isLive ? 'text-neutral-500' : 'text-red-400'
+      }`}>
+        {isConnecting ? 'Starting up...' :
+         isActive ? 'Viva is speaking' :
+         isLive ? 'Listening' :
+         'Disconnected'}
+      </span>
     </div>
   );
 }
@@ -82,6 +144,7 @@ function InterviewPageInner() {
   const stopFrameCaptureRef = useRef<(() => void) | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const aiSpeakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAISpeakingRef = useRef(false);
   const interviewStartRef = useRef<Date | null>(null);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -116,7 +179,10 @@ function InterviewPageInner() {
   }, []);
 
   const addMessage = useCallback((role: 'coach' | 'system', text: string) => {
-    setIsWaitingForAI(false);
+    // Only clear typing indicator when the AI actually speaks, not on status messages
+    if (role === 'coach') {
+      setIsWaitingForAI(false);
+    }
     setMessages((prev) => [
       ...prev,
       {
@@ -143,6 +209,18 @@ function InterviewPageInner() {
     }
   }, [sessionId, router]);
 
+  // Pre-request mic permission on mount so it's ready before WebSocket connects
+  useEffect(() => {
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        // Permission granted — stop the stream immediately, we'll start it properly later
+        stream.getTracks().forEach(t => t.stop());
+      })
+      .catch(() => {
+        // Permission denied — will be handled when startMic is called
+      });
+  }, []);
+
   // Initialise WebSocket + audio pipeline
   useEffect(() => {
     if (!sessionId) return;
@@ -150,17 +228,20 @@ function InterviewPageInner() {
     const player = new PcmPlayer(24000);
     playerRef.current = player;
 
-    // Wrap playChunk to track AI speaking state
+    // Wrap playChunk to track AI speaking state + mute mic during playback
     const originalPlayChunk = player.playChunk.bind(player);
     player.playChunk = (chunk: ArrayBuffer) => {
       originalPlayChunk(chunk);
       setIsAISpeaking(true);
+      isAISpeakingRef.current = true;
       if (aiSpeakingTimerRef.current) {
         clearTimeout(aiSpeakingTimerRef.current);
       }
+      // Mark AI as done speaking 800ms after the last audio chunk
       aiSpeakingTimerRef.current = setTimeout(() => {
         setIsAISpeaking(false);
-      }, 500);
+        isAISpeakingRef.current = false;
+      }, 800);
     };
 
     const ws = new VivaWebSocket(sessionId, {
@@ -171,7 +252,6 @@ function InterviewPageInner() {
         timerIntervalRef.current = setInterval(() => {
           setElapsedSeconds(Math.floor((Date.now() - interviewStartRef.current!.getTime()) / 1000));
         }, 1000);
-        addMessage('system', 'Connected to Viva. Interview starting...');
         setIsWaitingForAI(true);
       },
       onDisconnected: () => {
@@ -185,10 +265,14 @@ function InterviewPageInner() {
       },
       onMessage: (msg) => {
         switch (msg.type) {
-          case 'ai_response':
-          case 'transcript': {
+          case 'ai_response': {
             const text = msg.payload.text as string;
             addMessage('coach', text);
+            break;
+          }
+          case 'transcript': {
+            const text = msg.payload.text as string;
+            setTranscript(prev => (prev ? prev + ' ' + text : text));
             break;
           }
           case 'question': {
@@ -260,11 +344,18 @@ function InterviewPageInner() {
       workletNodeRef.current = workletNode;
 
       workletNode.port.onmessage = (ev: MessageEvent<ArrayBuffer>) => {
-        wsRef.current?.sendAudio(ev.data);
+        // Don't send mic audio while AI is speaking — prevents echo feedback loop
+        if (!isAISpeakingRef.current) {
+          wsRef.current?.sendAudio(ev.data);
+        }
       };
 
       source.connect(workletNode);
+      workletNode.connect(audioCtx.destination);
       setIsMicActive(true);
+
+      // Resume playback AudioContext on user gesture (browser autoplay policy)
+      playerRef.current?.resume();
     } catch (err) {
       addMessage('system', 'Microphone access denied. Please allow microphone and refresh.');
     }
@@ -287,6 +378,14 @@ function InterviewPageInner() {
       startMic();
     }
   }, [isMicActive, startMic, stopMic]);
+
+  // Auto-start microphone when connected so Gemini receives audio
+  // (prevents inactivity timeout from killing the session)
+  useEffect(() => {
+    if (status === 'connected' && !isMicActive) {
+      startMic();
+    }
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Start frame capture once camera is ready
   const handleCameraReady = useCallback(() => {
@@ -317,7 +416,7 @@ function InterviewPageInner() {
         }
       },
       (err) => console.warn('[FrameCapture]', err),
-      2000,
+      5000,
     );
     stopFrameCaptureRef.current = stop;
   }, [sessionId, addCoachingTip]);
@@ -357,6 +456,21 @@ function InterviewPageInner() {
     router.push(`/report?session=${sessionId}`);
   }, [router, sessionId]);
 
+  const endInterviewEarly = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      await fetch(`${API_BASE}/api/sessions/${sessionId}/end-early`, { method: 'POST' });
+      wsRef.current?.disconnect();
+      stopMic();
+      stopFrameCaptureRef.current?.();
+      setInterviewComplete(true);
+      addMessage('system', 'Interview ended early. You can view your report now.');
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    } catch {
+      addMessage('system', 'Failed to end interview. Try again.');
+    }
+  }, [sessionId, addMessage, stopMic]);
+
   const statusColor: Record<ConnectionStatus, string> = {
     idle: 'bg-neutral-500',
     connecting: 'bg-amber-400 animate-pulse',
@@ -371,6 +485,22 @@ function InterviewPageInner() {
         @keyframes aiWave {
           0%, 100% { transform: scaleY(0.4); opacity: 0.6; }
           50% { transform: scaleY(1); opacity: 1; }
+        }
+        @keyframes rainbow-rotate {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes pulse-ring {
+          0% { transform: scale(1); opacity: 0.4; }
+          100% { transform: scale(2); opacity: 0; }
+        }
+        @keyframes orbWave {
+          0%, 100% { transform: scaleY(0.4); }
+          50% { transform: scaleY(1.3); }
+        }
+        @keyframes gentle-breathe {
+          0%, 100% { transform: scaleY(0.7); opacity: 0.5; }
+          50% { transform: scaleY(1); opacity: 0.8; }
         }
         @keyframes typingBounce {
           0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
@@ -405,7 +535,7 @@ function InterviewPageInner() {
               <div className="font-mono text-sm text-emerald-400 tabular-nums bg-emerald-950/40 border border-emerald-800/40 rounded-lg px-3 py-1">
                 {formatElapsed(elapsedSeconds)}
               </div>
-              <AISpeakingIndicator isActive={isAISpeaking} />
+              {isAISpeaking && <span className="text-xs text-emerald-400">AI Speaking</span>}
             </div>
           )}
 
@@ -414,10 +544,11 @@ function InterviewPageInner() {
           </div>
 
           <button
-            onClick={() => router.push('/')}
-            className="text-xs text-neutral-500 hover:text-neutral-300 transition"
+            onClick={endInterviewEarly}
+            disabled={interviewComplete}
+            className="text-xs px-3 py-1.5 rounded-lg border border-red-500/40 text-red-400 hover:bg-red-500/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Exit
+            End Interview
           </button>
         </header>
 
@@ -469,6 +600,9 @@ function InterviewPageInner() {
                 </p>
               </div>
             )}
+
+            {/* AI Orb — visual focus point for the user */}
+            <AIOrb isActive={isAISpeaking} status={status} />
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">

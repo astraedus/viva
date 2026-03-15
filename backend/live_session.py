@@ -34,14 +34,16 @@ class MockLiveSession:
         b"\x00" * 1024,  # Silence — real impl would be actual PCM audio
     ]
 
-    def __init__(self, on_audio: AudioChunkCallback, on_text: Callable[[str], None]):
+    def __init__(self, on_audio: AudioChunkCallback, on_text: Callable[[str], None], on_input_transcript: Optional[Callable[[str], None]] = None, on_session_end: Optional[Callable[[str], None]] = None):
         self._on_audio = on_audio
         self._on_text = on_text
+        self._on_input_transcript = on_input_transcript
+        self._on_session_end = on_session_end
         self._active = False
         self._task: Optional[asyncio.Task] = None
         self._turn_count = 0
 
-    async def start(self, system_prompt: str) -> None:
+    async def start(self, system_prompt: str, first_question: str = "") -> None:
         self._active = True
         logger.info("MockLiveSession started (no API key)")
         # Send a greeting immediately
@@ -95,17 +97,21 @@ class GeminiLiveSession:
         api_key: str,
         on_audio: AudioChunkCallback,
         on_text: Callable[[str], None],
+        on_input_transcript: Optional[Callable[[str], None]] = None,
+        on_session_end: Optional[Callable[[str], None]] = None,
     ):
         from google import genai
 
         self._client = genai.Client(api_key=api_key)
         self._on_audio = on_audio
         self._on_text = on_text
+        self._on_input_transcript = on_input_transcript
+        self._on_session_end = on_session_end
         self._session = None
         self._receive_task: Optional[asyncio.Task] = None
         self._active = False
 
-    async def start(self, system_prompt: str) -> None:
+    async def start(self, system_prompt: str, first_question: str = "") -> None:
         """Open a Live API session with the given system prompt."""
         from google.genai import types
 
@@ -119,6 +125,8 @@ class GeminiLiveSession:
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
                 )
             ),
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
         )
 
         logger.info("Connecting to Gemini Live API (%s)...", self.MODEL)
@@ -128,6 +136,18 @@ class GeminiLiveSession:
             self._session = session
             self._active = True
             logger.info("Gemini Live session connected")
+
+            # Gemini Live won't speak first — send a brief trigger to start
+            # The system prompt already contains full interview context
+            await session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text="Hi, I'm ready to begin the interview.")],
+                ),
+                turn_complete=True,
+            )
+            logger.info("Sent initial trigger to Gemini")
+
             await self._receive_loop()
 
     async def send_audio(self, chunk: bytes) -> None:
@@ -136,10 +156,8 @@ class GeminiLiveSession:
             return
         try:
             from google.genai import types
-            await self._session.send(
-                input=types.LiveClientRealtimeInput(
-                    media_chunks=[types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")]
-                )
+            await self._session.send_realtime_input(
+                media=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000"),
             )
         except Exception as exc:
             logger.warning("Error sending audio: %s", exc)
@@ -149,7 +167,14 @@ class GeminiLiveSession:
         if not self._session or not self._active:
             return
         try:
-            await self._session.send(input=text, end_of_turn=True)
+            from google.genai import types
+            await self._session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text=text)],
+                ),
+                turn_complete=True,
+            )
         except Exception as exc:
             logger.warning("Error sending text: %s", exc)
 
@@ -164,44 +189,104 @@ class GeminiLiveSession:
         logger.info("GeminiLiveSession closed")
 
     async def _receive_loop(self) -> None:
-        """Read audio/text responses from Gemini and dispatch via callbacks."""
+        """Read audio/text responses from Gemini and dispatch via callbacks.
+
+        The receive() async generator may complete after each model turn.
+        We call it in a loop to support multi-turn conversation.
+        """
+        end_reason = "unknown"
+        turn_count = 0
         try:
-            async for response in self._session.receive():
-                if not self._active:
+            while self._active:
+                had_messages = False
+                turn_text_buffer = ""  # Accumulate output transcription per turn
+                try:
+                    async for response in self._session.receive():
+                        had_messages = True
+                        if not self._active:
+                            end_reason = "session closed by server"
+                            return
+
+                        server_content = getattr(response, "server_content", None)
+                        if not server_content:
+                            logger.debug("Non-content response: %s", type(response).__name__)
+                            continue
+
+                        # Check for interruption
+                        if getattr(server_content, "interrupted", False):
+                            logger.debug("Gemini interrupted by user speech")
+                            # Send whatever text was accumulated before interruption
+                            if turn_text_buffer.strip():
+                                self._on_text(turn_text_buffer.strip())
+                                turn_text_buffer = ""
+                            continue
+
+                        model_turn = getattr(server_content, "model_turn", None)
+                        if model_turn and model_turn.parts:
+                            for part in model_turn.parts:
+                                inline_data = getattr(part, "inline_data", None)
+                                if inline_data and isinstance(inline_data.data, bytes):
+                                    await self._on_audio(inline_data.data)
+
+                        # Check for input transcription (user's speech-to-text)
+                        input_transcription = getattr(server_content, "input_transcription", None)
+                        if input_transcription and input_transcription.text:
+                            logger.info("User said: %s", input_transcription.text)
+                            if self._on_input_transcript:
+                                self._on_input_transcript(input_transcription.text)
+
+                        # Accumulate output transcription — send as one message at turn end
+                        output_transcription = getattr(server_content, "output_transcription", None)
+                        if output_transcription and output_transcription.text:
+                            turn_text_buffer += output_transcription.text
+
+                        # Check for turn completion
+                        turn_complete = getattr(server_content, "turn_complete", False)
+                        if turn_complete:
+                            turn_count += 1
+                            logger.info("Gemini turn %d complete", turn_count)
+                            # Send accumulated transcription as a single message
+                            if turn_text_buffer.strip():
+                                self._on_text(turn_text_buffer.strip())
+                                # Detect interview wrap-up phrase
+                                if "best of luck" in turn_text_buffer.lower():
+                                    logger.info("Interview wrap-up detected at turn %d", turn_count)
+                                    end_reason = f"Interview completed after {turn_count} turn(s)"
+                                    self._active = False
+                                    turn_text_buffer = ""
+                                    break
+                                turn_text_buffer = ""
+                            break  # exit inner loop, re-enter receive()
+
+                except StopAsyncIteration:
+                    pass  # receive() generator exhausted for this turn, loop to next
+                # Flush any remaining text
+                if turn_text_buffer.strip():
+                    self._on_text(turn_text_buffer.strip())
+                    turn_text_buffer = ""
+
+                if not had_messages:
+                    # receive() returned immediately with no messages — connection dead
+                    end_reason = f"Gemini connection lost after {turn_count} turn(s)"
                     break
 
-                server_content = getattr(response, "server_content", None)
-                if not server_content:
-                    continue
-
-                # Check for interruption
-                if getattr(server_content, "interrupted", False):
-                    logger.debug("Gemini interrupted by user speech")
-                    continue
-
-                model_turn = getattr(server_content, "model_turn", None)
-                if model_turn and model_turn.parts:
-                    for part in model_turn.parts:
-                        inline_data = getattr(part, "inline_data", None)
-                        if inline_data and isinstance(inline_data.data, bytes):
-                            await self._on_audio(inline_data.data)
-                        elif hasattr(part, "text") and part.text:
-                            self._on_text(part.text)
-
-                # Check for input transcription
-                input_transcription = getattr(server_content, "input_transcription", None)
-                if input_transcription and input_transcription.text:
-                    logger.info("User said: %s", input_transcription.text)
-
-                # Check for output transcription
-                output_transcription = getattr(server_content, "output_transcription", None)
-                if output_transcription and output_transcription.text:
-                    self._on_text(output_transcription.text)
+                # Generator exhausted but session active — re-enter receive() for next turn
+                logger.info("Re-entering receive() loop after turn %d", turn_count)
 
         except asyncio.CancelledError:
             logger.info("Receive loop cancelled")
+            return
         except Exception as exc:
-            logger.error("Receive loop error: %s", exc)
+            end_reason = str(exc)
+            logger.error("Receive loop error: %s", exc, exc_info=True)
+
+        if end_reason == "unknown":
+            end_reason = f"Session ended after {turn_count} turn(s)"
+
+        logger.warning("Gemini Live session ended: %s", end_reason)
+        self._active = False
+        if self._on_session_end:
+            self._on_session_end(end_reason)
 
 
 # ---------------------------------------------------------------------------
@@ -211,10 +296,12 @@ class GeminiLiveSession:
 def create_live_session(
     on_audio: AudioChunkCallback,
     on_text: Callable[[str], None],
+    on_input_transcript: Optional[Callable[[str], None]] = None,
+    on_session_end: Optional[Callable[[str], None]] = None,
     api_key: Optional[str] = None,
 ) -> MockLiveSession | GeminiLiveSession:
     """Return a real or mock session depending on API key availability."""
     key = api_key or os.getenv("GOOGLE_API_KEY", "")
     if not key:
-        return MockLiveSession(on_audio=on_audio, on_text=on_text)
-    return GeminiLiveSession(api_key=key, on_audio=on_audio, on_text=on_text)
+        return MockLiveSession(on_audio=on_audio, on_text=on_text, on_input_transcript=on_input_transcript, on_session_end=on_session_end)
+    return GeminiLiveSession(api_key=key, on_audio=on_audio, on_text=on_text, on_input_transcript=on_input_transcript, on_session_end=on_session_end)

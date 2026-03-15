@@ -36,10 +36,18 @@ class PostureType(str, Enum):
 # Interview session models
 # ---------------------------------------------------------------------------
 
+class InterviewType(str, Enum):
+    behavioral = "behavioral"
+    technical = "technical"
+    case_study = "case_study"
+    mixed = "mixed"
+
+
 class InterviewConfig(BaseModel):
     role: str = Field(..., description="Target job role, e.g. 'Software Engineer'")
     industry: str = Field(..., description="Industry, e.g. 'Technology'")
     difficulty: Difficulty = Difficulty.medium
+    interview_type: InterviewType = InterviewType.mixed
     num_questions: int = Field(default=5, ge=1, le=20)
 
 
@@ -111,7 +119,16 @@ class StartSessionRequest(BaseModel):
 
 class StartSessionResponse(BaseModel):
     session_id: str
-    first_question: str
+    first_question: str = ""
+
+
+class BodyLanguageSummary(BaseModel):
+    avg_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    eye_contact_percentage: float = Field(default=0.0, ge=0.0, le=100.0)
+    posture_breakdown: dict[str, float] = Field(default_factory=dict)
+    dominant_expression: str = "neutral"
+    total_frames_analyzed: int = 0
+    tips: list[str] = Field(default_factory=list)
 
 
 class SessionReportResponse(BaseModel):
@@ -122,6 +139,7 @@ class SessionReportResponse(BaseModel):
     summary_feedback: str
     speech_patterns_aggregate: SpeechPatterns
     ai_summary: Optional[str] = None
+    body_language_summary: Optional[BodyLanguageSummary] = None
 
 
 # ---------------------------------------------------------------------------
